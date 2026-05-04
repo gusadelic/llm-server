@@ -11,9 +11,8 @@ INSTANCE_FILE="$WORKDIR/.instance_id"
 
 RELEASE_URL="${RELEASE_URL:-https://github.com/gusadelic/llm-server/releases/download/v0.1.0/llama-bin.zip}"
 
-MODEL_REPO="${MODEL_REPO:-unsloth/Qwen3.6-35B-A3B}"
-MODEL_FILE="${MODEL_FILE:-Qwen3.6-35B-A3B.gguf}"
-MMPROJ_FILE="${MMPROJ_FILE:-mmproj-F16.gguf}"
+MODEL_REPO="${MODEL_REPO:-cloudbjorn/Qwen3.6-35B-A3B_Opus-4.6-Reasoning-3300x-GGUF}"
+MODEL_FILE="${MODEL_FILE:-Qwen-35B-Reasoning-Q4_K_M.gguf}"
 
 PORT="${PORT:-8080}"
 HOST="0.0.0.0"
@@ -35,7 +34,6 @@ create_run_script() {
 
 BIN="$BIN_EXPORT_DIR/llama-server"
 MODEL="$MODEL_DIR/$MODEL_FILE"
-MMPROJ="$MODEL_DIR/$MMPROJ_FILE"
 LOG_FILE="$LOG_FILE"
 PORT="$PORT"
 HOST="$HOST"
@@ -45,16 +43,12 @@ start() {
     echo "⚠️  Server already running"
     return
   fi
-
   export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}"
-
   nohup "\$BIN" \\
     --host "\$HOST" \\
     --port "\$PORT" \\
     --model "\$MODEL" \\
-    --mmproj "\$MMPROJ" \\
     >"\$LOG_FILE" 2>&1 &
-
   echo "Started (PID \$!)"
 }
 
@@ -216,15 +210,7 @@ install_libs() {
 }
 
 # ===== Models =====
-ensure_models() {
-  if [ ! -f "$MODEL_DIR/$MODEL_FILE" ]; then
-    hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
-  fi
 
-  if [ ! -f "$MODEL_DIR/$MMPROJ_FILE" ]; then
-    hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
-  fi
-}
 
 # ===== Server =====
 start_server() {
@@ -234,7 +220,6 @@ start_server() {
     --host "$HOST" \
     --port "$PORT" \
     --model "$MODEL_DIR/$MODEL_FILE" \
-    --mmproj "$MODEL_DIR/$MMPROJ_FILE" \
     >"$LOG_FILE" 2>&1 &
 }
 

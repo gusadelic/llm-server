@@ -191,16 +191,45 @@ EOF
 }
 
 # ===== Server =====
-start_server() {
-  echo "Starting server..."
-  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:${LD_LIBRARY_PATH:-}"
+install_systemd_service() {
+  SERVICE_NAME="llama-server"
+  SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-  nohup "$BIN_EXPORT_DIR/llama-server" \
-    --host "$HOST" \
-    --port "$PORT" \
-    --model "$MODEL_DIR/$MODEL_FILE" \
-    --mmproj "$MODEL_DIR/$MMPROJ_FILE" \
-    >"$LOG_FILE" 2>&1 &
+  echo "Installing systemd service..."
+
+  local SUDO=""
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then SUDO="sudo"; fi
+
+  $SUDO tee "$SERVICE_FILE" >/dev/null <<EOF
+[Unit]
+Description=llama.cpp Server
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$WORKDIR
+Environment=LD_LIBRARY_PATH=$BIN_EXPORT_DIR
+ExecStart=$BIN_EXPORT_DIR/llama-server \\
+  --host $HOST \\
+  --port $PORT \\
+  --model $MODEL_DIR/$MODEL_FILE \\
+  --mmproj $MODEL_DIR/$MMPROJ_FILE \\
+  --ctx-size $CTX_SIZE \\
+  --n-predict $N_PREDICT
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  $SUDO systemctl daemon-reexec
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable "$SERVICE_NAME"
+  $SUDO systemctl restart "$SERVICE_NAME"
+
+  echo "✅ systemd service installed and started"
 }
 
 # ===== Health Check =====
@@ -236,20 +265,24 @@ print_instructions() {
   echo "Model:    $(basename "$MODEL_FILE")"
   echo ""
   echo "----------------------------------------------"
-  echo "Server Management"
+  echo "Server Management (systemd)"
   echo "----------------------------------------------"
   echo ""
   echo "Start:"
-  echo "  $WORKDIR/llm-server.sh start"
+  echo "  sudo systemctl start llama-server"
   echo ""
   echo "Stop:"
-  echo "  $WORKDIR/llm-server.sh stop"
+  echo "  sudo systemctl stop llama-server"
   echo ""
   echo "Restart:"
-  echo "  $WORKDIR/llm-server.sh restart"
+  echo "  sudo systemctl restart llama-server"
+  echo ""
+  echo "Status:"
+  echo "  sudo systemctl status llama-server"
   echo ""
   echo "Logs:"
-  echo "  $WORKDIR/llm-server.sh logs"
+  echo "  journalctl -u llama-server -f"
+  echo ""
   echo ""
   echo "Test:"
   echo "  curl $BASE_URL/models"
@@ -272,6 +305,6 @@ build_public_url
 
 create_control_script
 
-start_server
+install_systemd_service
 wait_for_server
 print_instructions

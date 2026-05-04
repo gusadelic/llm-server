@@ -21,13 +21,9 @@ HOST="0.0.0.0"
 
 mkdir -p "$WORKDIR" "$MODEL_DIR" "$BIN_EXPORT_DIR"
 
-# ===== Helpers =====
-has_systemd() {
-  [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1
-}
-
 # ===== Dependencies =====
 install_deps() {
+  echo "Step: install_deps"
   sudo apt-get update
   sudo apt-get install -y git curl unzip python3 python3-pip
 }
@@ -46,6 +42,8 @@ save_instance_id() {
 }
 
 prompt_instance_id() {
+  echo "Step: prompt_instance_id"
+
   load_instance_id
 
   if [ -n "${INSTANCE_ID:-}" ]; then
@@ -77,8 +75,8 @@ get_base_url() {
 
 # ===== HuggingFace =====
 ensure_hf_cli() {
+  echo "Step: ensure_hf_cli"
   if ! command -v hf >/dev/null 2>&1; then
-    echo "Installing HuggingFace CLI..."
     pip3 install --user -U huggingface_hub || true
     export PATH="$HOME/.local/bin:$PATH"
   fi
@@ -86,6 +84,8 @@ ensure_hf_cli() {
 
 # ===== Binaries =====
 download_binaries() {
+  echo "Step: download_binaries"
+
   if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then
     echo "Binaries already present."
     return
@@ -93,7 +93,6 @@ download_binaries() {
 
   echo "Downloading binaries..."
   curl -L --fail "$RELEASE_URL" -o /tmp/llama.zip
-
   unzip -o /tmp/llama.zip -d "$BIN_EXPORT_DIR"
 
   if [ -d "$BIN_EXPORT_DIR/llm/bin" ]; then
@@ -122,6 +121,8 @@ install_libs() {
 
 # ===== Models =====
 ensure_models() {
+  echo "Step: ensure_models"
+
   if [ ! -f "$MODEL_DIR/$MODEL_FILE" ]; then
     hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
   fi
@@ -131,45 +132,66 @@ ensure_models() {
   fi
 }
 
-# ===== systemd =====
-install_systemd_service() {
-  SERVICE_FILE="/etc/systemd/system/llama-server.service"
+# ===== run.sh =====
+create_run_script() {
+  cat > "$WORKDIR/run.sh" <<EOF
+#!/usr/bin/env bash
 
-  sudo tee "$SERVICE_FILE" >/dev/null <<EOF
-[Unit]
-Description=llama.cpp Server
-After=network.target
+BIN="$BIN_EXPORT_DIR/llama-server"
+MODEL="$MODEL_DIR/$MODEL_FILE"
+MMPROJ="$MODEL_DIR/$MMPROJ_FILE"
+LOG_FILE="$LOG_FILE"
+PORT="$PORT"
+HOST="$HOST"
 
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$WORKDIR
-Environment=LD_LIBRARY_PATH=$BIN_EXPORT_DIR
-ExecStart=$BIN_EXPORT_DIR/llama-server \\
-  --host $HOST \\
-  --port $PORT \\
-  --model $MODEL_DIR/$MODEL_FILE \\
-  --mmproj $MODEL_DIR/$MMPROJ_FILE
-Restart=always
-RestartSec=5
-StandardOutput=append:$LOG_FILE
-StandardError=append:$LOG_FILE
+start() {
+  if pgrep -f llama-server >/dev/null; then
+    echo "⚠️  Already running"
+    return
+  fi
 
-[Install]
-WantedBy=multi-user.target
-EOF
+  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}"
 
-  sudo systemctl daemon-reexec
-  sudo systemctl daemon-reload
-  sudo systemctl enable llama-server
-  sudo systemctl restart llama-server
+  nohup "\$BIN" \\
+    --host "\$HOST" \\
+    --port "\$PORT" \\
+    --model "\$MODEL" \\
+    --mmproj "\$MMPROJ" \\
+    >"\$LOG_FILE" 2>&1 &
+
+  echo "Started (PID \$!)"
 }
 
-# ===== Fallback server =====
-start_background_server() {
-  echo "Starting server (background mode)..."
+stop() {
+  pkill -f llama-server || echo "No process found"
+}
 
-  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:${LD_LIBRARY_PATH:-}"
+restart() {
+  stop
+  sleep 1
+  start
+}
+
+status() {
+  pgrep -f llama-server >/dev/null && echo "Running" || echo "Stopped"
+}
+
+logs() {
+  tail -f "\$LOG_FILE"
+}
+
+case "\$1" in
+  start|stop|restart|status|logs) "\$1" ;;
+  *) echo "Usage: \$0 {start|stop|restart|status|logs}" ;;
+esac
+EOF
+
+  chmod +x "$WORKDIR/run.sh"
+}
+
+# ===== Start server =====
+start_server() {
+  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 
   nohup "$BIN_EXPORT_DIR/llama-server" \
     --host "$HOST" \
@@ -177,11 +199,9 @@ start_background_server() {
     --model "$MODEL_DIR/$MODEL_FILE" \
     --mmproj "$MODEL_DIR/$MMPROJ_FILE" \
     >"$LOG_FILE" 2>&1 &
-
-  echo "Server started (PID $!)"
 }
 
-# ===== Health Check =====
+# ===== Health check =====
 wait_for_server() {
   BASE_URL="$(get_base_url)"
 
@@ -208,31 +228,17 @@ print_instructions() {
   echo "Base URL: $BASE_URL"
   echo "Model:    $(basename "$MODEL_FILE")"
   echo ""
-  if [[ "$PUBLIC_BASE_URL" == https://*thundercompute.net* ]]; then
-    echo "⚠️  ThunderCompute Port Setup Required"
-    echo ""
-    echo "If you cannot connect, you must expose port $PORT:"
-    echo ""
-    echo "  1. Open ThunderCompute UI"
-    echo "  2. Go to your instance"
-    echo "  3. Add port: $PORT"
-    echo "  4. Refresh the URL"
-    echo ""
-  fi
-  if has_systemd; then
-    echo "Start:   sudo systemctl start llama-server"
-    echo "Stop:    sudo systemctl stop llama-server"
-    echo "Restart: sudo systemctl restart llama-server"
-    echo "Logs:    journalctl -u llama-server -f"
-  else
-    echo "Start:   (already running)"
-    echo "Stop:    pkill -f llama-server"
-    echo "Logs:    tail -f $LOG_FILE"
-  fi
 
+  echo "⚠️ If using ThunderCompute:"
+  echo "   Expose port $PORT in the UI"
   echo ""
-  echo "Test:"
-  echo "  curl $BASE_URL/models"
+
+  echo "Server control:"
+  echo "  $WORKDIR/run.sh start"
+  echo "  $WORKDIR/run.sh stop"
+  echo "  $WORKDIR/run.sh restart"
+  echo "  $WORKDIR/run.sh status"
+  echo "  $WORKDIR/run.sh logs"
   echo ""
 }
 
@@ -245,15 +251,11 @@ ensure_models
 prompt_instance_id
 build_public_url
 
-echo "Stopping any existing processes..."
+create_run_script
+
+echo "Stopping old processes..."
 pkill -f llama-server || true
 
-if has_systemd; then
-  install_systemd_service
-else
-  echo "⚠️ systemd not available, using background mode"
-  start_background_server
-fi
-
+start_server
 wait_for_server
 print_instructions

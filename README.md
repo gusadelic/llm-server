@@ -10,7 +10,7 @@ This project runs llama.cpp with prebuilt CUDA binaries stored using Git LFS.
 
 ```bash
 sudo apt-get update
-sudo apt-get install git-lfs
-git lfs install
+sudo apt-get install -y git curl unzip
 git clone https://github.com/gusadelic/llm-server.git
-install.sh
+cd llm-server
+./install.sh

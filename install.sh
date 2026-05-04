@@ -205,15 +205,91 @@ start_server() {
 wait_for_server() {
   BASE_URL="$(get_base_url)"
 
-  for i in {1..30}; do
-    if curl -s "$BASE_URL/models" >/dev/null 2>&1; then
-      echo "✅ Server ready!"
-      return
+  # Colors
+  GREEN='\033[0;32m'
+  RED='\033[0;31m'
+  CYAN='\033[0;36m'
+  RESET='\033[0m'
+
+  # Spinner
+  SPINNER='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  spin_i=0
+
+  spin() {
+    spin_i=$(( (spin_i + 1) % ${#SPINNER} ))
+    printf "%s" "${SPINNER:$spin_i:1}"
+  }
+
+  update_line() {
+    printf "\r${CYAN}%-55s${RESET} %s" "$1" "$(spin)"
+  }
+
+  finish_line() {
+    printf "\r${GREEN}%-55s ✓${RESET}\n" "$1"
+  }
+
+  fail_line() {
+    printf "\r${RED}%-55s ✗${RESET}\n" "$1"
+  }
+
+  echo ""
+
+  # Step 1: process start
+  msg="[1/4] Starting server process..."
+  for i in {1..6}; do
+    update_line "$msg"
+    sleep 0.15
+  done
+  finish_line "$msg"
+
+  # Step 2: port bind
+  msg="[2/4] Waiting for port $PORT..."
+  for i in {1..20}; do
+    if ss -tuln 2>/dev/null | grep -q ":$PORT"; then
+      finish_line "$msg"
+      break
     fi
-    sleep 2
+    update_line "$msg"
+    sleep 0.3
   done
 
-  echo "⚠️ Server not reachable yet"
+  # Step 3: model load detection (log-based)
+  msg="[3/4] Loading model into memory..."
+  for i in {1..120}; do
+    if grep -q -i "model loaded\|server listening" "$LOG_FILE" 2>/dev/null; then
+      finish_line "$msg"
+      break
+    fi
+
+    if ! pgrep -f llama-server >/dev/null; then
+      fail_line "$msg"
+      echo -e "${RED}❌ Server process exited${RESET}"
+      echo "Check logs:"
+      echo "  tail -f $LOG_FILE"
+      return 1
+    fi
+
+    update_line "$msg"
+    sleep 1
+  done
+
+  # Step 4: API ready
+  msg="[4/4] Checking API availability..."
+  for i in {1..30}; do
+    if curl -s "$BASE_URL/models" >/dev/null 2>&1; then
+      finish_line "$msg"
+      echo -e "${GREEN}🚀 Server fully ready!${RESET}"
+      return
+    fi
+
+    update_line "$msg"
+    sleep 0.3
+  done
+
+  fail_line "$msg"
+  echo -e "${RED}⚠️ API did not respond in time${RESET}"
+  echo "Check logs:"
+  echo "  tail -f $LOG_FILE"
 }
 
 # ===== Instructions =====

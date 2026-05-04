@@ -266,10 +266,9 @@ TOTAL_SIZE=$(stat -c%s "$MODEL_PATH" 2>/dev/null || echo 1)
 for i in {1..300}; do
   # Get memory used by process
   PID=$(pgrep -f llama-server || true)
-
+  
   if [ -n "$PID" ]; then
-    MEM=$(ps -o rss= -p "$PID" | awk '{print $1 * 1024}') # bytes
-
+    MEM=$(ps -o rss= -p "$PID" | awk '{printf "%d", $1 * 1024}')
     PERCENT=$(( MEM * 100 / TOTAL_SIZE ))
     [ "$PERCENT" -gt 100 ] && PERCENT=100
   else

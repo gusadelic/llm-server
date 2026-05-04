@@ -25,27 +25,27 @@ install_deps() {
   sudo apt-get install -y git curl unzip python3 python3-pip
 }
 
-# ===== ThunderCompute =====
+# ===== ThunderCompute (detect only) =====
 install_tnr_cli() {
-  if command -v tnr >/dev/null 2>&1; then return; fi
-  echo "Installing ThunderCompute CLI..."
-  pip3 install --user thundercompute || true
-  export PATH="$HOME/.local/bin:$PATH"
+  if command -v tnr >/dev/null 2>&1; then
+    echo "ThunderCompute CLI detected."
+  else
+    echo ""
+    echo "⚠️  ThunderCompute CLI (tnr) not found."
+    echo "   To expose this server externally:"
+    echo "     1. Open ThunderCompute UI"
+    echo "     2. Add port: $PORT"
+    echo "     3. Use: https://<instance-id>-$PORT.thundercompute.net"
+    echo ""
+  fi
 }
 
 ensure_tnr_authenticated() {
-  if ! command -v tnr >/dev/null 2>&1; then return; fi
-  if tnr status >/dev/null 2>&1; then return; fi
+  command -v tnr >/dev/null 2>&1 || return
+  tnr status >/dev/null 2>&1 || return
 
   echo "🔐 Logging into ThunderCompute..."
-  if tnr login; then
-    echo "✅ Login successful."
-  else
-    echo "⚠️  Login skipped or failed."
-    return
-  fi
-
-  INSTANCE_ID="$(detect_instance_id || true)"
+  tnr login || true
 }
 
 try_expose_port() {
@@ -119,6 +119,7 @@ download_binaries() {
   curl -L "$RELEASE_URL" -o /tmp/llama.zip
   unzip -o /tmp/llama.zip -d "$BIN_EXPORT_DIR"
 
+  # Fix nested structure
   if [ -d "$BIN_EXPORT_DIR/llm/bin" ]; then
     mv "$BIN_EXPORT_DIR/llm/bin/"* "$BIN_EXPORT_DIR/"
     rm -rf "$BIN_EXPORT_DIR/llm"
@@ -147,60 +148,13 @@ ensure_models() {
   [ -f "$MODEL_DIR/$MMPROJ_FILE" ] || hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
 }
 
-# ===== Control Script =====
-create_control_script() {
-  cat > "$WORKDIR/llm-server.sh" <<EOF
-#!/usr/bin/env bash
-
-LOG_FILE="$LOG_FILE"
-BIN="$BIN_EXPORT_DIR/llama-server"
-MODEL="$MODEL_DIR/$MODEL_FILE"
-MMPROJ="$MODEL_DIR/$MMPROJ_FILE"
-PORT="$PORT"
-HOST="$HOST"
-
-case "\$1" in
-  start)
-    echo "Starting server..."
-    nohup "\$BIN" \\
-      --host "\$HOST" \\
-      --port "\$PORT" \\
-      --model "\$MODEL" \\
-      --mmproj "\$MMPROJ" \\
-      >"\$LOG_FILE" 2>&1 &
-    ;;
-  stop)
-    echo "Stopping server..."
-    pkill -f llama-server || true
-    ;;
-  restart)
-    "\$0" stop
-    sleep 1
-    "\$0" start
-    ;;
-  logs)
-    tail -f "\$LOG_FILE"
-    ;;
-  *)
-    echo "Usage: \$0 {start|stop|restart|logs}"
-    ;;
-esac
-EOF
-
-  chmod +x "$WORKDIR/llm-server.sh"
-}
-
-# ===== Server =====
+# ===== systemd =====
 install_systemd_service() {
-  SERVICE_NAME="llama-server"
-  SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+  SERVICE_FILE="/etc/systemd/system/llama-server.service"
 
   echo "Installing systemd service..."
 
-  local SUDO=""
-  if [ "${EUID:-$(id -u)}" -ne 0 ]; then SUDO="sudo"; fi
-
-  $SUDO tee "$SERVICE_FILE" >/dev/null <<EOF
+  sudo tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
 Description=llama.cpp Server
 After=network.target
@@ -214,22 +168,20 @@ ExecStart=$BIN_EXPORT_DIR/llama-server \\
   --host $HOST \\
   --port $PORT \\
   --model $MODEL_DIR/$MODEL_FILE \\
-  --mmproj $MODEL_DIR/$MMPROJ_FILE \\
-  --ctx-size $CTX_SIZE \\
-  --n-predict $N_PREDICT
+  --mmproj $MODEL_DIR/$MMPROJ_FILE
 Restart=always
 RestartSec=5
+StandardOutput=append:$LOG_FILE
+StandardError=append:$LOG_FILE
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-  $SUDO systemctl daemon-reexec
-  $SUDO systemctl daemon-reload
-  $SUDO systemctl enable "$SERVICE_NAME"
-  $SUDO systemctl restart "$SERVICE_NAME"
-
-  echo "✅ systemd service installed and started"
+  sudo systemctl daemon-reexec
+  sudo systemctl daemon-reload
+  sudo systemctl enable llama-server
+  sudo systemctl restart llama-server
 }
 
 # ===== Health Check =====
@@ -247,7 +199,8 @@ wait_for_server() {
   done
 
   echo "⚠️ Server not reachable yet."
-  echo "Check logs: tail -f $LOG_FILE"
+  echo "Check logs:"
+  echo "  journalctl -u llama-server -f"
 }
 
 # ===== Instructions =====
@@ -265,7 +218,7 @@ print_instructions() {
   echo "Model:    $(basename "$MODEL_FILE")"
   echo ""
   echo "----------------------------------------------"
-  echo "Server Management (systemd)"
+  echo "Server Management"
   echo "----------------------------------------------"
   echo ""
   echo "Start:"
@@ -282,7 +235,6 @@ print_instructions() {
   echo ""
   echo "Logs:"
   echo "  journalctl -u llama-server -f"
-  echo ""
   echo ""
   echo "Test:"
   echo "  curl $BASE_URL/models"
@@ -303,7 +255,8 @@ try_expose_port
 prompt_instance_id
 build_public_url
 
-create_control_script
+echo "Stopping any existing instances..."
+pkill -f llama-server || true
 
 install_systemd_service
 wait_for_server

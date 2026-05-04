@@ -38,7 +38,14 @@ ensure_tnr_authenticated() {
   if tnr status >/dev/null 2>&1; then return; fi
 
   echo "🔐 Logging into ThunderCompute..."
-  tnr login || echo "⚠️  Login skipped"
+  if tnr login; then
+    echo "✅ Login successful."
+  else
+    echo "⚠️  Login skipped or failed."
+    return
+  fi
+
+  INSTANCE_ID="$(detect_instance_id || true)"
 }
 
 try_expose_port() {
@@ -71,10 +78,16 @@ prompt_instance_id() {
 
   if [ -n "$INSTANCE_ID" ]; then
     echo "Detected instance ID: $INSTANCE_ID"
-  else
-    read -r -p "Enter ThunderCompute instance ID (or press Enter to skip): " INSTANCE_ID
+    save_instance_id
+    return
   fi
 
+  if [ ! -t 0 ]; then
+    echo "Non-interactive environment, skipping instance ID prompt."
+    return
+  fi
+
+  read -r -p "Enter ThunderCompute instance ID (or press Enter to skip): " INSTANCE_ID
   save_instance_id
 }
 
@@ -97,7 +110,10 @@ ensure_hf_cli() {
 
 # ===== Binaries =====
 download_binaries() {
-  if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then return; fi
+  if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then
+    echo "Binaries already present."
+    return
+  fi
 
   echo "Downloading binaries..."
   curl -L "$RELEASE_URL" -o /tmp/llama.zip
@@ -112,6 +128,7 @@ download_binaries() {
 }
 
 install_libs() {
+  echo "Installing shared libraries..."
   sudo cp "$BIN_EXPORT_DIR"/lib*.so* /usr/local/lib/ || true
 
   for lib in "$BIN_EXPORT_DIR"/lib*.so.*; do
@@ -130,10 +147,53 @@ ensure_models() {
   [ -f "$MODEL_DIR/$MMPROJ_FILE" ] || hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
 }
 
+# ===== Control Script =====
+create_control_script() {
+  cat > "$WORKDIR/llm-server.sh" <<EOF
+#!/usr/bin/env bash
+
+LOG_FILE="$LOG_FILE"
+BIN="$BIN_EXPORT_DIR/llama-server"
+MODEL="$MODEL_DIR/$MODEL_FILE"
+MMPROJ="$MODEL_DIR/$MMPROJ_FILE"
+PORT="$PORT"
+HOST="$HOST"
+
+case "\$1" in
+  start)
+    echo "Starting server..."
+    nohup "\$BIN" \\
+      --host "\$HOST" \\
+      --port "\$PORT" \\
+      --model "\$MODEL" \\
+      --mmproj "\$MMPROJ" \\
+      >"\$LOG_FILE" 2>&1 &
+    ;;
+  stop)
+    echo "Stopping server..."
+    pkill -f llama-server || true
+    ;;
+  restart)
+    "\$0" stop
+    sleep 1
+    "\$0" start
+    ;;
+  logs)
+    tail -f "\$LOG_FILE"
+    ;;
+  *)
+    echo "Usage: \$0 {start|stop|restart|logs}"
+    ;;
+esac
+EOF
+
+  chmod +x "$WORKDIR/llm-server.sh"
+}
+
 # ===== Server =====
 start_server() {
   echo "Starting server..."
-  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:$LD_LIBRARY_PATH"
+  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:${LD_LIBRARY_PATH:-}"
 
   nohup "$BIN_EXPORT_DIR/llama-server" \
     --host "$HOST" \
@@ -147,18 +207,18 @@ start_server() {
 wait_for_server() {
   BASE_URL="$(get_base_url)"
 
-  echo "Waiting for server to be ready..."
+  echo "Waiting for server..."
 
   for i in {1..30}; do
     if curl -s "$BASE_URL/models" >/dev/null 2>&1; then
-      echo "✅ Server is ready!"
+      echo "✅ Server ready!"
       return
     fi
     sleep 2
   done
 
-  echo "⚠️  Server not reachable yet. Check logs:"
-  echo "tail -f $LOG_FILE"
+  echo "⚠️ Server not reachable yet."
+  echo "Check logs: tail -f $LOG_FILE"
 }
 
 # ===== Instructions =====
@@ -175,15 +235,26 @@ print_instructions() {
   echo "API Key:  anything"
   echo "Model:    $(basename "$MODEL_FILE")"
   echo ""
+  echo "----------------------------------------------"
+  echo "Server Management"
+  echo "----------------------------------------------"
+  echo ""
+  echo "Start:"
+  echo "  $WORKDIR/llm-server.sh start"
+  echo ""
+  echo "Stop:"
+  echo "  $WORKDIR/llm-server.sh stop"
+  echo ""
+  echo "Restart:"
+  echo "  $WORKDIR/llm-server.sh restart"
+  echo ""
   echo "Logs:"
-  echo "  tail -f $LOG_FILE"
+  echo "  $WORKDIR/llm-server.sh logs"
   echo ""
   echo "Test:"
   echo "  curl $BASE_URL/models"
   echo ""
-  echo "Stop:"
-  echo "  pkill -f llama-server"
-  echo ""
+  echo "=============================================="
 }
 
 # ===== Run =====
@@ -198,6 +269,8 @@ ensure_models
 try_expose_port
 prompt_instance_id
 build_public_url
+
+create_control_script
 
 start_server
 wait_for_server

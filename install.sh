@@ -4,6 +4,8 @@ set -euo pipefail
 trap 'echo "❌ Error on line $LINENO"; exit 1' ERR
 
 # ===== Config =====
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 WORKDIR="${WORKDIR:-$HOME/llm}"
 MODEL_DIR="${MODEL_DIR:-$WORKDIR/models/qwen3.6}"
 BIN_EXPORT_DIR="${BIN_EXPORT_DIR:-$WORKDIR/bin}"
@@ -212,7 +214,11 @@ wait_for_server() {
   RESET='\033[0m'
 
   # Spinner
-  SPINNER='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  if locale charmap 2>/dev/null | grep -qi utf-8; then
+    SPINNER='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  else
+    SPINNER='|/-\\'
+  fi
   spin_i=0
 
   spin() {

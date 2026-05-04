@@ -54,6 +54,19 @@ install_deps() {
   fi
 }
 
+install_shared_libs() {
+  echo "Installing shared libraries to /usr/local/lib"
+
+  local SUDO=""
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then SUDO="sudo"; fi
+
+  # Copy only shared libs
+  $SUDO cp "$BIN_EXPORT_DIR"/lib*.so* /usr/local/lib/
+
+  # Refresh linker cache
+  $SUDO ldconfig
+}
+
 ensure_hf_cli() {
   if ! command -v hf >/dev/null 2>&1; then
     python3 -m pip install --user -U huggingface_hub
@@ -72,6 +85,7 @@ download_binaries() {
 
   if curl -L --fail "$RELEASE_URL" -o /tmp/llama-bin.zip; then
     unzip -o /tmp/llama-bin.zip -d "$BIN_EXPORT_DIR"
+    install_shared_libs
     echo "Binaries downloaded successfully."
     return 0
   else

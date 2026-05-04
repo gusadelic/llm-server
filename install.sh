@@ -256,41 +256,43 @@ wait_for_server() {
     update_line "$msg"; sleep 0.3
   done
 
-# Step 3
-msg="[3/4] Loading model..."
-echo "$msg"
-
-MODEL_PATH="$MODEL_DIR/$MODEL_FILE"
-TOTAL_SIZE=$(stat -c%s "$MODEL_PATH" 2>/dev/null || echo 1)
-
-for i in {1..300}; do
-  # Get memory used by process
-  PID=$(pgrep -f llama-server || true)
+  # Step 3
+  msg="[3/4] Loading model..."
+  echo -e "${GREEN}$msg${RESET}"
   
-  if [ -n "$PID" ]; then
-    MEM=$(ps -o rss= -p "$PID" | awk '{printf "%d", $1 * 1024}')
-    PERCENT=$(( MEM * 100 / TOTAL_SIZE ))
-    [ "$PERCENT" -gt 100 ] && PERCENT=100
-  else
-    PERCENT=0
-  fi
-
-  BAR_WIDTH=40
-  FILLED=$(( PERCENT * BAR_WIDTH / 100 ))
-
-  BAR=$(printf "%-${FILLED}s" "#" | tr ' ' '#')
-  EMPTY=$(printf "%-$((BAR_WIDTH-FILLED))s" "")
-
-  printf "\r[%-40s] %3d%%" "$BAR$EMPTY" "$PERCENT"
-
-  if grep -qi "model loaded\|server listening" "$LOG_FILE" 2>/dev/null; then
-    printf "\r[%-40s] 100%%\n" "$(printf '%40s' | tr ' ' '#')"
-    echo "Model load complete"
-    break
-  fi
-
-  sleep 0.5
-done
+  # Dots on next line
+  DOT_COUNT=0
+  MAX_DOTS=80
+  
+  while true; do
+    # Check if model is loaded
+    if grep -qi "model loaded\|server listening" "$LOG_FILE" 2>/dev/null; then
+      echo ""
+      echo -e "${GREEN}Model load complete ✓${RESET}"
+      break
+    fi
+  
+    # Check if process died
+    if ! pgrep -f llama-server >/dev/null; then
+      echo ""
+      echo -e "${RED}❌ Server process exited${RESET}"
+      echo "Check logs:"
+      echo "  tail -f $LOG_FILE"
+      return 1
+    fi
+  
+    # Print dot
+    printf "."
+    DOT_COUNT=$((DOT_COUNT + 1))
+  
+    # Wrap line every MAX_DOTS
+    if [ "$DOT_COUNT" -ge "$MAX_DOTS" ]; then
+      printf "\n"
+      DOT_COUNT=0
+    fi
+  
+    sleep 1
+  done
 
   # Step 4
   msg="[4/4] Checking API..."

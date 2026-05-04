@@ -25,39 +25,7 @@ install_deps() {
   sudo apt-get install -y git curl unzip python3 python3-pip
 }
 
-# ===== ThunderCompute (detect only) =====
-install_tnr_cli() {
-  if command -v tnr >/dev/null 2>&1; then
-    echo "ThunderCompute CLI detected."
-  else
-    echo ""
-    echo "⚠️  ThunderCompute CLI (tnr) not found."
-    echo "   To expose this server externally:"
-    echo "     1. Open ThunderCompute UI"
-    echo "     2. Add port: $PORT"
-    echo "     3. Use: https://<instance-id>-$PORT.thundercompute.net"
-    echo ""
-  fi
-}
-
-ensure_tnr_authenticated() {
-  command -v tnr >/dev/null 2>&1 || return
-  tnr status >/dev/null 2>&1 || return
-
-  echo "🔐 Logging into ThunderCompute..."
-  tnr login || true
-}
-
-try_expose_port() {
-  command -v tnr >/dev/null 2>&1 && tnr ports add "$PORT" || true
-}
-
-detect_instance_id() {
-  command -v tnr >/dev/null 2>&1 || return
-  tnr status >/dev/null 2>&1 || return
-  tnr status | awk 'NR==2 {print $2}'
-}
-
+# ===== Instance ID =====
 load_instance_id() {
   [ -f "$INSTANCE_FILE" ] && INSTANCE_ID="$(cat "$INSTANCE_FILE")"
 }
@@ -74,20 +42,22 @@ prompt_instance_id() {
     return
   fi
 
-  INSTANCE_ID="$(detect_instance_id || true)"
-
-  if [ -n "$INSTANCE_ID" ]; then
-    echo "Detected instance ID: $INSTANCE_ID"
-    save_instance_id
-    return
-  fi
-
   if [ ! -t 0 ]; then
-    echo "Non-interactive environment, skipping instance ID prompt."
+    echo "Non-interactive mode, skipping instance ID."
     return
   fi
 
-  read -r -p "Enter ThunderCompute instance ID (or press Enter to skip): " INSTANCE_ID
+  echo ""
+  echo "🌐 ThunderCompute setup (optional)"
+  echo ""
+  echo "To access your server externally:"
+  echo "  1. Open ThunderCompute UI"
+  echo "  2. Add port: $PORT"
+  echo "  3. Use URL:"
+  echo "     https://<instance-id>-$PORT.thundercompute.net"
+  echo ""
+
+  read -r -p "Enter instance ID (or press Enter for localhost): " INSTANCE_ID
   save_instance_id
 }
 
@@ -105,7 +75,10 @@ get_base_url() {
 
 # ===== HuggingFace =====
 ensure_hf_cli() {
-  command -v hf >/dev/null 2>&1 || pip3 install --user -U huggingface_hub
+  if ! command -v hf >/dev/null 2>&1; then
+    pip3 install --user -U huggingface_hub || true
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
 }
 
 # ===== Binaries =====
@@ -119,7 +92,6 @@ download_binaries() {
   curl -L "$RELEASE_URL" -o /tmp/llama.zip
   unzip -o /tmp/llama.zip -d "$BIN_EXPORT_DIR"
 
-  # Fix nested structure
   if [ -d "$BIN_EXPORT_DIR/llm/bin" ]; then
     mv "$BIN_EXPORT_DIR/llm/bin/"* "$BIN_EXPORT_DIR/"
     rm -rf "$BIN_EXPORT_DIR/llm"
@@ -144,8 +116,8 @@ install_libs() {
 
 # ===== Models =====
 ensure_models() {
-  [ -f "$MODEL_DIR/$MODEL_FILE" ] || hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
-  [ -f "$MODEL_DIR/$MMPROJ_FILE" ] || hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
+  hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
+  hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
 }
 
 # ===== systemd =====
@@ -199,8 +171,7 @@ wait_for_server() {
   done
 
   echo "⚠️ Server not reachable yet."
-  echo "Check logs:"
-  echo "  journalctl -u llama-server -f"
+  echo "Check logs: journalctl -u llama-server -f"
 }
 
 # ===== Instructions =====
@@ -236,26 +207,19 @@ print_instructions() {
   echo "Logs:"
   echo "  journalctl -u llama-server -f"
   echo ""
-  echo "Test:"
-  echo "  curl $BASE_URL/models"
-  echo ""
   echo "=============================================="
 }
 
 # ===== Run =====
 install_deps
-install_tnr_cli
-ensure_tnr_authenticated
 ensure_hf_cli
 
 download_binaries
 ensure_models
 
-try_expose_port
 prompt_instance_id
 build_public_url
 
-echo "Stopping any existing instances..."
 pkill -f llama-server || true
 
 install_systemd_service

@@ -46,7 +46,7 @@ create_run_script() {
 #!/usr/bin/env bash
 
 BIN="$BIN_EXPORT_DIR/llama-server"
-MODEL="$MODEL_DIR/$MODEL_FILE"
+MODEL="$MODEL_PATH"
 LOG_FILE="$LOG_FILE"
 PORT="$PORT"
 HOST="$HOST"
@@ -139,35 +139,46 @@ install_deps() {
 check_model() {
   MODEL_PATH="$MODEL_DIR/$MODEL_FILE"
 
-  # If default exists, use it
+  # If model already exists, use it
   if [ -f "$MODEL_PATH" ]; then
     return
   fi
 
   echo ""
-  echo "⚠️ Model not found at:"
+  echo "⚠️ Model not found:"
   echo "   $MODEL_PATH"
   echo ""
 
-  # Non-interactive mode (fail fast)
+  # Non-interactive mode
   if [ ! -t 0 ]; then
-    echo "❌ No TTY available. Set MODEL_FILE or MODEL_PATH."
+    echo "❌ No TTY available. Set MODEL_FILE or pre-download the model."
     exit 1
   fi
 
-  # Prompt user
   while true; do
-    read -r -p "Enter full path to GGUF model file: " INPUT_PATH
+    read -r -p "Enter URL to GGUF model file: " MODEL_URL
 
-    # Expand ~ if used
-    INPUT_PATH="${INPUT_PATH/#\~/$HOME}"
+    if [ -z "$MODEL_URL" ]; then
+      echo "❌ URL cannot be empty."
+      continue
+    fi
 
-    if [ -f "$INPUT_PATH" ]; then
-      MODEL_PATH="$INPUT_PATH"
-      echo "✅ Using model: $MODEL_PATH"
+    # Try to infer filename from URL
+    FILENAME="$(basename "$MODEL_URL")"
+    TARGET_PATH="$MODEL_DIR/$FILENAME"
+
+    echo "Downloading to: $TARGET_PATH"
+    mkdir -p "$MODEL_DIR"
+
+    if curl -L --fail --progress-bar "$MODEL_URL" -o "$TARGET_PATH"; then
+      MODEL_PATH="$TARGET_PATH"
+      echo ""
+      echo "✅ Download complete:"
+      echo "   $MODEL_PATH"
       break
     else
-      echo "❌ File not found. Try again."
+      echo ""
+      echo "❌ Download failed. Check URL and try again."
     fi
   done
 }
@@ -227,11 +238,12 @@ start_server() {
   nohup "$BIN_EXPORT_DIR/llama-server" \
     --host "$HOST" \
     --port "$PORT" \
-    --model "$MODEL_DIR/$MODEL_FILE" \
+    --model "$MODEL_PATH"
     >"$LOG_FILE" 2>&1 &
 }
 
 # ===== Run =====
+
 remove_deadsnakes
 use_az_mirror
 install_deps
@@ -243,5 +255,7 @@ prompt_instance_id
 build_public_url
 
 pkill -f llama-server || true
+
+export MODEL_PATH
 create_run_script
 start_server

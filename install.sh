@@ -67,6 +67,24 @@ install_shared_libs() {
   $SUDO ldconfig
 }
 
+fix_library_symlinks() {
+  echo "Fixing shared library symlinks..."
+
+  local SUDO=""
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then SUDO="sudo"; fi
+
+  for lib in "$BIN_EXPORT_DIR"/lib*.so.*; do
+    [ -e "$lib" ] || continue
+
+    base=$(basename "$lib")
+    name="${base%%.so.*}"
+
+    # Create:
+    # libname.so -> libname.so.X
+    $SUDO ln -sf "$base" "/usr/local/lib/${name}.so"
+  done
+}
+
 ensure_hf_cli() {
   if ! command -v hf >/dev/null 2>&1; then
     python3 -m pip install --user -U huggingface_hub
@@ -86,6 +104,8 @@ download_binaries() {
   if curl -L --fail "$RELEASE_URL" -o /tmp/llama-bin.zip; then
     unzip -o /tmp/llama-bin.zip -d "$BIN_EXPORT_DIR"
     install_shared_libs
+    fix_library_symlinks
+    sudo ldconfig
     echo "Binaries downloaded successfully."
     return 0
   else

@@ -4,15 +4,15 @@ trap 'echo "❌ Error on line $LINENO"; exit 1' ERR
 
 # ===== Config =====
 WORKDIR="${WORKDIR:-$HOME/llm}"
-MODEL_DIR="${MODEL_DIR:-$WORKDIR/models/qwen3.6}"
+MODEL_DIR="${MODEL_DIR:-$WORKDIR/models}"
 BIN_EXPORT_DIR="${BIN_EXPORT_DIR:-$WORKDIR/bin}"
 LOG_FILE="${LOG_FILE:-$WORKDIR/llama-server.log}"
 INSTANCE_FILE="$WORKDIR/.instance_id"
 
 RELEASE_URL="${RELEASE_URL:-https://github.com/gusadelic/llm-server/releases/download/v0.1.0/llama-bin.zip}"
 
-MODEL_REPO="${MODEL_REPO:-cloudbjorn/Qwen3.6-35B-A3B_Opus-4.6-Reasoning-3300x-GGUF}"
-MODEL_FILE="${MODEL_FILE:-Qwen-35B-Reasoning-Q4_K_M.gguf}"
+MODEL_REPO="${MODEL_REPO:}"
+MODEL_FILE="${MODEL_FILE:}"
 
 PORT="${PORT:-8080}"
 HOST="0.0.0.0"
@@ -137,13 +137,39 @@ install_deps() {
 
 # ===== Model Check =====
 check_model() {
-  if [ ! -f "$MODEL_DIR/$MODEL_FILE" ]; then
-    echo "❌ Model not found:"
-    echo "   $MODEL_DIR/$MODEL_FILE"
-    echo ""
-    echo "Download it manually and place it there."
+  MODEL_PATH="$MODEL_DIR/$MODEL_FILE"
+
+  # If default exists, use it
+  if [ -f "$MODEL_PATH" ]; then
+    return
+  fi
+
+  echo ""
+  echo "⚠️ Model not found at:"
+  echo "   $MODEL_PATH"
+  echo ""
+
+  # Non-interactive mode (fail fast)
+  if [ ! -t 0 ]; then
+    echo "❌ No TTY available. Set MODEL_FILE or MODEL_PATH."
     exit 1
   fi
+
+  # Prompt user
+  while true; do
+    read -r -p "Enter full path to GGUF model file: " INPUT_PATH
+
+    # Expand ~ if used
+    INPUT_PATH="${INPUT_PATH/#\~/$HOME}"
+
+    if [ -f "$INPUT_PATH" ]; then
+      MODEL_PATH="$INPUT_PATH"
+      echo "✅ Using model: $MODEL_PATH"
+      break
+    else
+      echo "❌ File not found. Try again."
+    fi
+  done
 }
 
 # ===== Instance ID =====

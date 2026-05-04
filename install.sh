@@ -11,215 +11,90 @@ INSTANCE_FILE="$WORKDIR/.instance_id"
 
 RELEASE_URL="${RELEASE_URL:-https://github.com/gusadelic/llm-server/releases/download/v0.1.0/llama-bin.zip}"
 
-MODEL_REPO="${MODEL_REPO:}"
-MODEL_FILE="${MODEL_FILE:}"
+MODEL_REPO="${MODEL_REPO:-cloudbjorn/Qwen3.6-35B-A3B_Opus-4.6-Reasoning-3300x-GGUF}"
+MODEL_FILE="${MODEL_FILE:-Qwen-35B-Reasoning-Q4_K_M.gguf}"
 
 PORT="${PORT:-8080}"
 HOST="0.0.0.0"
 
 mkdir -p "$WORKDIR" "$MODEL_DIR" "$BIN_EXPORT_DIR"
 
-# ===== Mirror + PPA Fixes =====
+# ===== System Fixes =====
 remove_deadsnakes() {
-  echo "Removing deadsnakes PPA..."
   sudo add-apt-repository --remove ppa:deadsnakes/ppa 2>/dev/null || true
   sudo rm -f /etc/apt/sources.list.d/deadsnakes-ubuntu-ppa*.list
 }
 
 use_az_mirror() {
-  echo "Switching APT sources to University of Arizona mirror..."
   sudo sed -i 's|http://[^ ]*archive.ubuntu.com/ubuntu|http://mirror.arizona.edu/ubuntu|g' /etc/apt/sources.list
   sudo sed -i 's|http://security.ubuntu.com/ubuntu|http://mirror.arizona.edu/ubuntu|g' /etc/apt/sources.list
 }
 
-# ===== Spinner Setup =====
-if [ -t 1 ]; then INTERACTIVE=1; else INTERACTIVE=0; fi
-
-if locale charmap 2>/dev/null | grep -qi utf-8; then
-  SPINNER_CHARS=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-else
-  SPINNER_CHARS=('|' '/' '-' '\')
-fi
-
-create_run_script() {
-  cat > "$WORKDIR/run.sh" <<EOF
-#!/usr/bin/env bash
-
-BIN="$BIN_EXPORT_DIR/llama-server"
-MODEL="$MODEL_PATH"
-LOG_FILE="$LOG_FILE"
-PORT="$PORT"
-HOST="$HOST"
-
-start() {
-  if pgrep -f llama-server >/dev/null; then
-    echo "⚠️  Server already running"
-    return
-  fi
-  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}"
-  nohup "\$BIN" \\
-    --host "\$HOST" \\
-    --port "\$PORT" \\
-    --model "\$MODEL" \\
-    >"\$LOG_FILE" 2>&1 &
-  echo "Started (PID \$!)"
-}
-
-stop() {
-  pkill -f llama-server || echo "No process found"
-}
-
-restart() {
-  stop
-  sleep 1
-  start
-}
-
-status() {
-  if pgrep -f llama-server >/dev/null; then
-    echo "✅ Running"
-  else
-    echo "❌ Stopped"
-  fi
-}
-
-logs() {
-  tail -f "\$LOG_FILE"
-}
-
-case "\$1" in
-  start|stop|restart|status|logs)
-    "\$1"
-    ;;
-  *)
-    echo "Usage: \$0 {start|stop|restart|status|logs}"
-    ;;
-esac
-EOF
-
-  chmod +x "$WORKDIR/run.sh"
-}
-
-# ===== UI helpers =====
-spin_i=0
-spin_char() {
-  spin_i=$(( (spin_i + 1) % ${#SPINNER_CHARS[@]} ))
-  printf "%s" "${SPINNER_CHARS[$spin_i]}"
-}
-
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-RESET='\033[0m'
-
-update_line() {
-  if [ "$INTERACTIVE" = "1" ]; then
-    printf "\r\033[K${CYAN}%-55s${RESET} %s" "$1" "$(spin_char)"
-  else
-    echo "$1..."
-  fi
-}
-
-finish_line() {
-  if [ "$INTERACTIVE" = "1" ]; then
-    printf "\r\033[K${GREEN}%-55s ✓${RESET}\n" "$1"
-  else
-    echo "$1 ✓"
-  fi
-}
-
-# ===== Dependencies =====
 install_deps() {
-  echo "Step: install_deps"
   sudo apt-get update -o Acquire::ForceIPv4=true
   sudo apt-get install -y git curl unzip python3 python3-pip
 }
 
-# ===== Model Check =====
-check_model() {
-  MODEL_PATH="$MODEL_DIR/$MODEL_FILE"
+# ===== Spinner =====
+if [ -t 1 ]; then INTERACTIVE=1; else INTERACTIVE=0; fi
+SPINNER=('|' '/' '-' '\')
+spin_i=0
+spin() { spin_i=$(( (spin_i+1)%4 )); printf "%s" "${SPINNER[$spin_i]}"; }
 
-  # If model already exists, use it
-  if [ -f "$MODEL_PATH" ]; then
+update_line() {
+  [ "$INTERACTIVE" = "1" ] && printf "\r\033[K%s %s" "$1" "$(spin)" || echo "$1..."
+}
+finish_line() {
+  [ "$INTERACTIVE" = "1" ] && printf "\r\033[K%s ✓\n" "$1" || echo "$1 ✓"
+}
+
+# ===== Model =====
+resolve_model() {
+  DEFAULT_URL="https://huggingface.co/$MODEL_REPO/resolve/main/$MODEL_FILE"
+  DEFAULT_PATH="$MODEL_DIR/$MODEL_FILE"
+
+  if [ -f "$DEFAULT_PATH" ]; then
+    MODEL_PATH="$DEFAULT_PATH"
     return
   fi
 
   echo ""
-  echo "⚠️ Model not found:"
-  echo "   $MODEL_PATH"
+  echo "Model not found:"
+  echo "  $DEFAULT_PATH"
   echo ""
 
-  # Non-interactive mode
-  if [ ! -t 0 ]; then
-    echo "❌ No TTY available. Set MODEL_FILE or pre-download the model."
-    exit 1
-  fi
+  FILE_SIZE=$(curl -sI "$DEFAULT_URL" | awk '/Content-Length/ {print $2}' | tr -d '\r')
+  [ -n "$FILE_SIZE" ] && SIZE="~$((FILE_SIZE/1024/1024)) MB" || SIZE="unknown"
 
-  while true; do
-    read -r -p "Enter URL to GGUF model file: " MODEL_URL
+  echo "Default model:"
+  echo "  Repo : $MODEL_REPO"
+  echo "  File : $MODEL_FILE"
+  echo "  URL  : $DEFAULT_URL"
+  echo "  Size : $SIZE"
+  echo ""
 
-    if [ -z "$MODEL_URL" ]; then
-      echo "❌ URL cannot be empty."
-      continue
-    fi
+  echo "[Enter] Download | c = custom | n = cancel"
+  read -r -p "Choice: " choice
 
-    # Try to infer filename from URL
-    FILENAME="$(basename "$MODEL_URL")"
-    TARGET_PATH="$MODEL_DIR/$FILENAME"
+  case "$choice" in
+    ""|"y") MODEL_URL="$DEFAULT_URL" ;;
+    "c")
+      read -r -p "Enter URL: " MODEL_URL
+      ;;
+    *) exit 1 ;;
+  esac
 
-    echo "Downloading to: $TARGET_PATH"
-    mkdir -p "$MODEL_DIR"
+  FILE="$(basename "$MODEL_URL")"
+  MODEL_PATH="$MODEL_DIR/$FILE"
 
-    if curl -L --fail --progress-bar "$MODEL_URL" -o "$TARGET_PATH"; then
-      MODEL_PATH="$TARGET_PATH"
-      echo ""
-      echo "✅ Download complete:"
-      echo "   $MODEL_PATH"
-      break
-    else
-      echo ""
-      echo "❌ Download failed. Check URL and try again."
-    fi
-  done
-}
-
-# ===== Instance ID =====
-load_instance_id() {
-  [ -f "$INSTANCE_FILE" ] && INSTANCE_ID="$(cat "$INSTANCE_FILE")"
-}
-
-save_instance_id() {
-  [ -n "${INSTANCE_ID:-}" ] && echo "$INSTANCE_ID" > "$INSTANCE_FILE"
-}
-
-prompt_instance_id() {
-  load_instance_id
-  [ -n "${INSTANCE_ID:-}" ] && echo "Using saved instance ID: $INSTANCE_ID" && return
-  [ ! -t 0 ] && return
-  read -r -p "Enter instance ID (or press Enter for localhost): " INSTANCE_ID || true
-  save_instance_id
-}
-
-build_public_url() {
-  if [ -n "${INSTANCE_ID:-}" ]; then
-    PUBLIC_BASE_URL="https://${INSTANCE_ID}-${PORT}.thundercompute.net"
-  else
-    PUBLIC_BASE_URL="http://localhost:${PORT}"
-  fi
-}
-
-get_base_url() {
-  echo "${PUBLIC_BASE_URL}/v1"
+  echo "Downloading → $MODEL_PATH"
+  curl -L --fail --progress-bar -C - "$MODEL_URL" -o "$MODEL_PATH"
 }
 
 # ===== Binaries =====
 download_binaries() {
-  if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then
-    echo "Binaries already present."
-    return
-  fi
+  if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then return; fi
 
-  echo "Downloading binaries..."
   curl -L --fail "$RELEASE_URL" -o /tmp/llama.zip
   unzip -o /tmp/llama.zip -d "$BIN_EXPORT_DIR"
 
@@ -238,24 +113,114 @@ start_server() {
   nohup "$BIN_EXPORT_DIR/llama-server" \
     --host "$HOST" \
     --port "$PORT" \
-    --model "$MODEL_PATH"
+    --model "$MODEL_PATH" \
     >"$LOG_FILE" 2>&1 &
 }
 
-# ===== Run =====
+wait_for_server() {
+  echo ""
+  msg="Starting server..."
+  for i in {1..10}; do update_line "$msg"; sleep 0.2; done
+  finish_line "$msg"
 
+  msg="Waiting for port..."
+  for i in {1..20}; do
+    if ss -tuln | grep -q ":$PORT"; then finish_line "$msg"; break; fi
+    update_line "$msg"; sleep 0.3
+  done
+
+  echo "Loading model..."
+  while true; do
+    if grep -qi "model loaded\|listening" "$LOG_FILE" 2>/dev/null; then
+      echo "✓ Model loaded"
+      break
+    fi
+    sleep 1
+    printf "."
+  done
+  echo ""
+}
+
+# ===== Instance =====
+load_instance_id() { [ -f "$INSTANCE_FILE" ] && INSTANCE_ID="$(cat "$INSTANCE_FILE")"; }
+save_instance_id() { [ -n "${INSTANCE_ID:-}" ] && echo "$INSTANCE_ID" > "$INSTANCE_FILE"; }
+
+prompt_instance_id() {
+  load_instance_id
+  [ -n "${INSTANCE_ID:-}" ] && return
+  read -r -p "Instance ID (Enter for localhost): " INSTANCE_ID || true
+  save_instance_id
+}
+
+build_url() {
+  [ -n "${INSTANCE_ID:-}" ] \
+    && BASE_URL="https://${INSTANCE_ID}-${PORT}.thundercompute.net" \
+    || BASE_URL="http://localhost:${PORT}"
+}
+
+# ===== Run Script =====
+create_run_script() {
+cat > "$WORKDIR/run.sh" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  start) nohup "$BIN_EXPORT_DIR/llama-server" --model "$MODEL_PATH" --port "$PORT" & ;;
+  stop) pkill -f llama-server ;;
+  restart) pkill -f llama-server; sleep 1; "\$0" start ;;
+  status) pgrep -f llama-server && echo running || echo stopped ;;
+  logs) tail -f "$LOG_FILE" ;;
+esac
+EOF
+chmod +x "$WORKDIR/run.sh"
+}
+
+# ===== Instructions =====
+print_instructions() {
+  echo ""
+  echo "=============================================="
+  echo "🚀 LLM Server Ready"
+  echo "=============================================="
+  echo "Base URL: ${BASE_URL}/v1"
+  echo "Model: $(basename "$MODEL_PATH")"
+  echo ""
+
+  if [[ "$BASE_URL" == https://*thundercompute.net* ]]; then
+    echo "⚠️  ThunderCompute Port Setup Required"
+    echo ""
+    echo "If you cannot connect, you must expose port $PORT:"
+    echo ""
+    echo "  1. Open ThunderCompute UI"
+    echo "  2. Go to your instance"
+    echo "  3. Add port: $PORT"
+    echo "  4. Refresh the URL"
+    echo ""
+  fi
+
+  echo "Server control:"
+  echo "  $WORKDIR/run.sh start"
+  echo "  $WORKDIR/run.sh stop"
+  echo "  $WORKDIR/run.sh restart"
+  echo "  $WORKDIR/run.sh status"
+  echo "  $WORKDIR/run.sh logs"
+  echo ""
+  echo "Test with:"
+  echo "  curl ${BASE_URL}/v1/models"
+  echo ""
+}
+
+# ===== Main =====
 remove_deadsnakes
 use_az_mirror
 install_deps
 
 download_binaries
-check_model
+resolve_model
+export MODEL_PATH
 
 prompt_instance_id
-build_public_url
+build_url
 
 pkill -f llama-server || true
-
-export MODEL_PATH
 create_run_script
 start_server
+wait_for_server
+print_instructions

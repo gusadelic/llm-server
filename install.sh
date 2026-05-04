@@ -19,6 +19,19 @@ HOST="0.0.0.0"
 
 mkdir -p "$WORKDIR" "$MODEL_DIR" "$BIN_EXPORT_DIR"
 
+# ===== Mirror + PPA Fixes =====
+remove_deadsnakes() {
+  echo "Removing deadsnakes PPA..."
+  sudo add-apt-repository --remove ppa:deadsnakes/ppa 2>/dev/null || true
+  sudo rm -f /etc/apt/sources.list.d/deadsnakes-ubuntu-ppa*.list
+}
+
+use_az_mirror() {
+  echo "Switching APT sources to University of Arizona mirror..."
+  sudo sed -i 's|http://[^ ]*archive.ubuntu.com/ubuntu|http://mirror.arizona.edu/ubuntu|g' /etc/apt/sources.list
+  sudo sed -i 's|http://security.ubuntu.com/ubuntu|http://mirror.arizona.edu/ubuntu|g' /etc/apt/sources.list
+}
+
 # ===== Spinner Setup =====
 if [ -t 1 ]; then INTERACTIVE=1; else INTERACTIVE=0; fi
 
@@ -87,6 +100,7 @@ EOF
   chmod +x "$WORKDIR/run.sh"
 }
 
+# ===== UI helpers =====
 spin_i=0
 spin_char() {
   spin_i=$(( (spin_i + 1) % ${#SPINNER_CHARS[@]} ))
@@ -114,44 +128,37 @@ finish_line() {
   fi
 }
 
-fail_line() {
-  if [ "$INTERACTIVE" = "1" ]; then
-    printf "\r\033[K${RED}%-55s ✗${RESET}\n" "$1"
-  else
-    echo "$1 ✗"
-  fi
-}
-
 # ===== Dependencies =====
 install_deps() {
   echo "Step: install_deps"
-  sudo apt-get update
+  sudo apt-get update -o Acquire::ForceIPv4=true
   sudo apt-get install -y git curl unzip python3 python3-pip
+}
+
+# ===== Model Check =====
+check_model() {
+  if [ ! -f "$MODEL_DIR/$MODEL_FILE" ]; then
+    echo "❌ Model not found:"
+    echo "   $MODEL_DIR/$MODEL_FILE"
+    echo ""
+    echo "Download it manually and place it there."
+    exit 1
+  fi
 }
 
 # ===== Instance ID =====
 load_instance_id() {
-  if [ -f "$INSTANCE_FILE" ]; then
-    INSTANCE_ID="$(cat "$INSTANCE_FILE")"
-  fi
+  [ -f "$INSTANCE_FILE" ] && INSTANCE_ID="$(cat "$INSTANCE_FILE")"
 }
 
 save_instance_id() {
-  if [ -n "${INSTANCE_ID:-}" ]; then
-    echo "$INSTANCE_ID" > "$INSTANCE_FILE"
-  fi
+  [ -n "${INSTANCE_ID:-}" ] && echo "$INSTANCE_ID" > "$INSTANCE_FILE"
 }
 
 prompt_instance_id() {
   load_instance_id
-
-  if [ -n "${INSTANCE_ID:-}" ]; then
-    echo "Using saved instance ID: $INSTANCE_ID"
-    return
-  fi
-
-  if [ ! -t 0 ]; then return; fi
-
+  [ -n "${INSTANCE_ID:-}" ] && echo "Using saved instance ID: $INSTANCE_ID" && return
+  [ ! -t 0 ] && return
   read -r -p "Enter instance ID (or press Enter for localhost): " INSTANCE_ID || true
   save_instance_id
 }
@@ -166,14 +173,6 @@ build_public_url() {
 
 get_base_url() {
   echo "${PUBLIC_BASE_URL}/v1"
-}
-
-# ===== HuggingFace =====
-ensure_hf_cli() {
-  if ! command -v hf >/dev/null 2>&1; then
-    pip3 install --user -U huggingface_hub || true
-    export PATH="$HOME/.local/bin:$PATH"
-  fi
 }
 
 # ===== Binaries =====
@@ -192,30 +191,13 @@ download_binaries() {
     rm -rf "$BIN_EXPORT_DIR/llm"
   fi
 
-  install_libs
-}
-
-install_libs() {
   sudo cp "$BIN_EXPORT_DIR"/lib*.so* /usr/local/lib/ || true
-
-  for lib in "$BIN_EXPORT_DIR"/lib*.so.*; do
-    if [ -e "$lib" ]; then
-      base=$(basename "$lib")
-      name="${base%%.so.*}"
-      sudo ln -sf "$base" "/usr/local/lib/${name}.so"
-    fi
-  done
-
   sudo ldconfig
 }
-
-# ===== Models =====
-
 
 # ===== Server =====
 start_server() {
   export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
-
   nohup "$BIN_EXPORT_DIR/llama-server" \
     --host "$HOST" \
     --port "$PORT" \
@@ -223,113 +205,13 @@ start_server() {
     >"$LOG_FILE" 2>&1 &
 }
 
-# ===== Wait =====
-wait_for_server() {
-  BASE_URL="$(get_base_url)"
-
-  echo ""
-
-  # Step 1
-  msg="[1/4] Starting server process..."
-  for i in {1..6}; do update_line "$msg"; sleep 0.15; done
-  finish_line "$msg"
-
-  # Step 2
-  msg="[2/4] Waiting for port $PORT..."
-  for i in {1..20}; do
-    if ss -tuln | grep -q ":$PORT"; then finish_line "$msg"; break; fi
-    update_line "$msg"; sleep 0.3
-  done
-
-  # Step 3
-  msg="[3/4] Loading model..."
-  echo -e "${GREEN}$msg${RESET}"
-  
-  # Dots on next line
-  DOT_COUNT=0
-  MAX_DOTS=80
-  
-  while true; do
-    # Check if model is loaded
-    if grep -qi "model loaded\|server listening" "$LOG_FILE" 2>/dev/null; then
-      echo ""
-      echo -e "${GREEN}Model load complete ✓${RESET}"
-      break
-    fi
-  
-    # Check if process died
-    if ! pgrep -f llama-server >/dev/null; then
-      echo ""
-      echo -e "${RED}❌ Server process exited${RESET}"
-      echo "Check logs:"
-      echo "  tail -f $LOG_FILE"
-      return 1
-    fi
-  
-    # Print dot
-    printf "."
-    DOT_COUNT=$((DOT_COUNT + 1))
-  
-    # Wrap line every MAX_DOTS
-    if [ "$DOT_COUNT" -ge "$MAX_DOTS" ]; then
-      printf "\n"
-      DOT_COUNT=0
-    fi
-  
-    sleep 1
-  done
-
-  # Step 4
-  msg="[4/4] Checking API..."
-  for i in {1..30}; do
-    if curl -s "$BASE_URL/models" >/dev/null 2>&1; then
-      finish_line "$msg"
-      echo -e "${GREEN}🚀 Server ready!${RESET}"
-      return
-    fi
-    update_line "$msg"; sleep 0.3
-  done
-
-  fail_line "$msg"
-}
-
-# ===== Instructions =====
-print_instructions() {
-  BASE_URL="$(get_base_url)"
-
-  echo ""
-  echo "=============================================="
-  echo "🚀 LLM Server Ready"
-  echo "=============================================="
-  echo "Base URL: $BASE_URL"
-  echo "Model: $(basename "$MODEL_FILE")"
-  echo ""
-  if [[ "$PUBLIC_BASE_URL" == https://*thundercompute.net* ]]; then
-    echo "⚠️  ThunderCompute Port Setup Required"
-    echo ""
-    echo "If you cannot connect, you must expose port $PORT:"
-    echo ""
-    echo "  1. Open ThunderCompute UI"
-    echo "  2. Go to your instance"
-    echo "  3. Add port: $PORT"
-    echo "  4. Refresh the URL"
-    echo ""
-  fi
-  echo ""
-  echo "Server control:"
-  echo "  $WORKDIR/run.sh start"
-  echo "  $WORKDIR/run.sh stop"
-  echo "  $WORKDIR/run.sh restart"
-  echo "  $WORKDIR/run.sh status"
-  echo "  $WORKDIR/run.sh logs"
-  echo ""
-}
-
 # ===== Run =====
+remove_deadsnakes
+use_az_mirror
 install_deps
-ensure_hf_cli
+
 download_binaries
-ensure_models
+check_model
 
 prompt_instance_id
 build_public_url
@@ -337,5 +219,3 @@ build_public_url
 pkill -f llama-server || true
 create_run_script
 start_server
-wait_for_server
-print_instructions

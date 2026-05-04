@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-script bootstrap + launch for Qwen3.6 on llama.cpp.
-
-# ===== Config =====
 WORKDIR="${WORKDIR:-$HOME/llm}"
 LLAMA_DIR="${LLAMA_DIR:-$WORKDIR/llama.cpp}"
 MODEL_DIR="${MODEL_DIR:-$WORKDIR/models/qwen3.6}"
@@ -45,12 +42,17 @@ install_deps() {
     if [ "${EUID:-$(id -u)}" -ne 0 ]; then SUDO="sudo"; fi
     $SUDO apt-get update
     $SUDO apt-get install -y \
-      git cmake ninja-build build-essential pkg-config \
-      python3 python3-pip
+      git git-lfs cmake ninja-build build-essential pkg-config \
+      python3 python3-pip unzip
   else
     echo "Unsupported package manager." >&2
     exit 1
   fi
+}
+
+ensure_git_lfs() {
+  git lfs install --skip-repo
+  git -C "$WORKDIR" lfs pull || true
 }
 
 ensure_hf_cli() {
@@ -107,20 +109,15 @@ ensure_llama_cpp() {
   fi
 
   if [ "$recorded_commit" != "$new_commit" ]; then
-    echo "llama.cpp has updates since last build."
-    echo "Current commit: ${new_commit}"
-    echo "Built commit:   ${recorded_commit:-unknown}"
-
-    if prompt_yes_no "Rebuild binaries to match latest source?"; then
+    echo "llama.cpp updated."
+    if prompt_yes_no "Rebuild binaries?"; then
       cmake "${cmake_args[@]}"
       cmake --build "$LLAMA_DIR/build" --config Release -j"$(nproc)"
       printf '%s\n' "$new_commit" > "$STAMP_FILE"
       export_binaries
-    else
-      echo "Using existing binaries."
     fi
   else
-    echo "Binaries are up to date with source."
+    echo "Binaries are up to date."
   fi
 }
 
@@ -128,35 +125,22 @@ ensure_models() {
   local model_path="$MODEL_DIR/$MODEL_FILE"
   local mmproj_path="$MODEL_DIR/$MMPROJ_FILE"
 
-  if [ ! -f "$model_path" ]; then
-    hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
-  fi
-
-  if [ ! -f "$mmproj_path" ]; then
-    hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
-  fi
+  [ -f "$model_path" ] || hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
+  [ -f "$mmproj_path" ] || hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
 }
 
 start_server() {
-  local server_bin="$BIN_EXPORT_DIR/llama-server"
-  local model_path="$MODEL_DIR/$MODEL_FILE"
-  local mmproj_path="$MODEL_DIR/$MMPROJ_FILE"
-
-  if [ ! -x "$server_bin" ]; then
-    echo "Missing llama-server binary." >&2
-    exit 1
-  fi
-
-  exec "$server_bin" \
+  exec "$BIN_EXPORT_DIR/llama-server" \
     --host "$HOST" \
     --port "$PORT" \
-    --model "$model_path" \
-    --mmproj "$mmproj_path" \
+    --model "$MODEL_DIR/$MODEL_FILE" \
+    --mmproj "$MODEL_DIR/$MMPROJ_FILE" \
     --ctx-size "$CTX_SIZE" \
     --n-predict "$N_PREDICT"
 }
 
 install_deps
+ensure_git_lfs
 ensure_hf_cli
 ensure_llama_cpp
 ensure_models

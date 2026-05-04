@@ -11,8 +11,8 @@ INSTANCE_FILE="$WORKDIR/.instance_id"
 
 RELEASE_URL="${RELEASE_URL:-https://github.com/gusadelic/llm-server/releases/download/v0.1.0/llama-bin.zip}"
 
-MODEL_REPO="${MODEL_REPO:-unsloth/Qwen3.6-35B-A3B-GGUF}"
-MODEL_FILE="${MODEL_FILE:-Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf}"
+MODEL_REPO="${MODEL_REPO:-unsloth/Qwen3.6-35B-A3B}"
+MODEL_FILE="${MODEL_FILE:-Qwen3.6-35B-A3B.gguf}"
 MMPROJ_FILE="${MMPROJ_FILE:-mmproj-F16.gguf}"
 
 PORT="${PORT:-8080}"

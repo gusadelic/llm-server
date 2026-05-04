@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'echo "❌ Error on line $LINENO"; exit 1' ERR
+
 # ===== Config =====
 WORKDIR="${WORKDIR:-$HOME/llm}"
 MODEL_DIR="${MODEL_DIR:-$WORKDIR/models/qwen3.6}"
@@ -21,20 +23,27 @@ mkdir -p "$WORKDIR" "$MODEL_DIR" "$BIN_EXPORT_DIR"
 
 # ===== Dependencies =====
 install_deps() {
+  echo "Step: install_deps"
   sudo apt-get update
   sudo apt-get install -y git curl unzip python3 python3-pip
 }
 
 # ===== Instance ID =====
 load_instance_id() {
-  [ -f "$INSTANCE_FILE" ] && INSTANCE_ID="$(cat "$INSTANCE_FILE")"
+  if [ -f "$INSTANCE_FILE" ]; then
+    INSTANCE_ID="$(cat "$INSTANCE_FILE")"
+  fi
 }
 
 save_instance_id() {
-  [ -n "${INSTANCE_ID:-}" ] && echo "$INSTANCE_ID" > "$INSTANCE_FILE"
+  if [ -n "${INSTANCE_ID:-}" ]; then
+    echo "$INSTANCE_ID" > "$INSTANCE_FILE"
+  fi
 }
 
 prompt_instance_id() {
+  echo "Step: prompt_instance_id"
+
   load_instance_id
 
   if [ -n "${INSTANCE_ID:-}" ]; then
@@ -50,14 +59,15 @@ prompt_instance_id() {
   echo ""
   echo "🌐 ThunderCompute setup (optional)"
   echo ""
-  echo "To access your server externally:"
+  echo "To access externally:"
   echo "  1. Open ThunderCompute UI"
   echo "  2. Add port: $PORT"
-  echo "  3. Use URL:"
+  echo "  3. URL:"
   echo "     https://<instance-id>-$PORT.thundercompute.net"
   echo ""
 
-  read -r -p "Enter instance ID (or press Enter for localhost): " INSTANCE_ID
+  read -r -p "Enter instance ID (or press Enter for localhost): " INSTANCE_ID || true
+
   save_instance_id
 }
 
@@ -75,7 +85,10 @@ get_base_url() {
 
 # ===== HuggingFace =====
 ensure_hf_cli() {
+  echo "Step: ensure_hf_cli"
+
   if ! command -v hf >/dev/null 2>&1; then
+    echo "Installing HuggingFace CLI..."
     pip3 install --user -U huggingface_hub || true
     export PATH="$HOME/.local/bin:$PATH"
   fi
@@ -83,17 +96,23 @@ ensure_hf_cli() {
 
 # ===== Binaries =====
 download_binaries() {
+  echo "Step: download_binaries"
+
   if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then
     echo "Binaries already present."
     return
   fi
 
   echo "Downloading binaries..."
-  curl -L "$RELEASE_URL" -o /tmp/llama.zip
+  if ! curl -L --fail "$RELEASE_URL" -o /tmp/llama.zip; then
+    echo "❌ Failed to download binaries"
+    exit 1
+  fi
+
   unzip -o /tmp/llama.zip -d "$BIN_EXPORT_DIR"
 
   if [ -d "$BIN_EXPORT_DIR/llm/bin" ]; then
-    mv "$BIN_EXPORT_DIR/llm/bin/"* "$BIN_EXPORT_DIR/"
+    mv "$BIN_EXPORT_DIR/llm/bin/"* "$BIN_EXPORT_DIR/" || true
     rm -rf "$BIN_EXPORT_DIR/llm"
   fi
 
@@ -102,13 +121,15 @@ download_binaries() {
 
 install_libs() {
   echo "Installing shared libraries..."
+
   sudo cp "$BIN_EXPORT_DIR"/lib*.so* /usr/local/lib/ || true
 
   for lib in "$BIN_EXPORT_DIR"/lib*.so.*; do
-    [ -e "$lib" ] || continue
-    base=$(basename "$lib")
-    name="${base%%.so.*}"
-    sudo ln -sf "$base" "/usr/local/lib/${name}.so"
+    if [ -e "$lib" ]; then
+      base=$(basename "$lib")
+      name="${base%%.so.*}"
+      sudo ln -sf "$base" "/usr/local/lib/${name}.so"
+    fi
   done
 
   sudo ldconfig
@@ -116,15 +137,28 @@ install_libs() {
 
 # ===== Models =====
 ensure_models() {
-  hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
-  hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
+  echo "Step: ensure_models"
+
+  if [ ! -f "$MODEL_DIR/$MODEL_FILE" ]; then
+    hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR" || {
+      echo "❌ Failed to download model"
+      exit 1
+    }
+  fi
+
+  if [ ! -f "$MODEL_DIR/$MMPROJ_FILE" ]; then
+    hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR" || {
+      echo "❌ Failed to download mmproj"
+      exit 1
+    }
+  fi
 }
 
 # ===== systemd =====
 install_systemd_service() {
-  SERVICE_FILE="/etc/systemd/system/llama-server.service"
+  echo "Step: install_systemd_service"
 
-  echo "Installing systemd service..."
+  SERVICE_FILE="/etc/systemd/system/llama-server.service"
 
   sudo tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
@@ -158,9 +192,9 @@ EOF
 
 # ===== Health Check =====
 wait_for_server() {
-  BASE_URL="$(get_base_url)"
+  echo "Step: wait_for_server"
 
-  echo "Waiting for server..."
+  BASE_URL="$(get_base_url)"
 
   for i in {1..30}; do
     if curl -s "$BASE_URL/models" >/dev/null 2>&1; then
@@ -170,7 +204,7 @@ wait_for_server() {
     sleep 2
   done
 
-  echo "⚠️ Server not reachable yet."
+  echo "⚠️ Server not reachable yet"
   echo "Check logs: journalctl -u llama-server -f"
 }
 
@@ -183,43 +217,26 @@ print_instructions() {
   echo "🚀 LLM Server Ready"
   echo "=============================================="
   echo ""
-  echo "Provider: OpenAI Compatible"
   echo "Base URL: $BASE_URL"
-  echo "API Key:  anything"
   echo "Model:    $(basename "$MODEL_FILE")"
   echo ""
-  echo "----------------------------------------------"
-  echo "Server Management"
-  echo "----------------------------------------------"
+  echo "Start:   sudo systemctl start llama-server"
+  echo "Stop:    sudo systemctl stop llama-server"
+  echo "Restart: sudo systemctl restart llama-server"
+  echo "Logs:    journalctl -u llama-server -f"
   echo ""
-  echo "Start:"
-  echo "  sudo systemctl start llama-server"
-  echo ""
-  echo "Stop:"
-  echo "  sudo systemctl stop llama-server"
-  echo ""
-  echo "Restart:"
-  echo "  sudo systemctl restart llama-server"
-  echo ""
-  echo "Status:"
-  echo "  sudo systemctl status llama-server"
-  echo ""
-  echo "Logs:"
-  echo "  journalctl -u llama-server -f"
-  echo ""
-  echo "=============================================="
 }
 
 # ===== Run =====
 install_deps
 ensure_hf_cli
-
 download_binaries
 ensure_models
 
 prompt_instance_id
 build_public_url
 
+echo "Stopping old processes..."
 pkill -f llama-server || true
 
 install_systemd_service

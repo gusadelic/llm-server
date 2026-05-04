@@ -185,24 +185,49 @@ wait_for_server() {
 
   echo ""
 
+  # Step 1
   msg="[1/4] Starting server process..."
   for i in {1..6}; do update_line "$msg"; sleep 0.15; done
   finish_line "$msg"
 
+  # Step 2
   msg="[2/4] Waiting for port $PORT..."
   for i in {1..20}; do
     if ss -tuln | grep -q ":$PORT"; then finish_line "$msg"; break; fi
     update_line "$msg"; sleep 0.3
   done
 
-  msg="[3/4] Loading model..."
-  for i in {1..120}; do
-    if grep -qi "model loaded\|server listening" "$LOG_FILE" 2>/dev/null; then
-      finish_line "$msg"; break
-    fi
-    update_line "$msg"; sleep 1
-  done
+  # Step 3 (NEW)
+  echo "[3/4] Loading model..."
+  echo "----------------------------------------------"
 
+  # Follow logs until model loaded
+  (
+    tail -n 20 -f "$LOG_FILE" 2>/dev/null &
+    TAIL_PID=$!
+
+    for i in {1..120}; do
+      if grep -qi "model loaded\|server listening" "$LOG_FILE" 2>/dev/null; then
+        kill "$TAIL_PID" 2>/dev/null || true
+        break
+      fi
+
+      if ! pgrep -f llama-server >/dev/null; then
+        kill "$TAIL_PID" 2>/dev/null || true
+        echo "❌ Server process exited"
+        echo "Check logs:"
+        echo "  tail -f $LOG_FILE"
+        return 1
+      fi
+
+      sleep 1
+    done
+  )
+
+  echo "----------------------------------------------"
+  echo "Model load complete"
+
+  # Step 4
   msg="[4/4] Checking API..."
   for i in {1..30}; do
     if curl -s "$BASE_URL/models" >/dev/null 2>&1; then

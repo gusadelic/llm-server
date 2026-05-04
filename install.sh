@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ===== Config =====
 WORKDIR="${WORKDIR:-$HOME/llm}"
 LLAMA_DIR="${LLAMA_DIR:-$WORKDIR/llama.cpp}"
 MODEL_DIR="${MODEL_DIR:-$WORKDIR/models/qwen3.6}"
 STAMP_FILE="${STAMP_FILE:-$LLAMA_DIR/build/.llama_cpp_commit}"
 BIN_EXPORT_DIR="${BIN_EXPORT_DIR:-$WORKDIR/bin}"
+
+# 🔥 Release URL (NEW)
+RELEASE_URL="${RELEASE_URL:-https://github.com/gusadelic/llm-server/releases/download/v0.1.0/llama-bin.zip}"
 
 MODEL_REPO="${MODEL_REPO:-unsloth/Qwen3.6-35B-A3B-GGUF}"
 MODEL_FILE="${MODEL_FILE:-Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf}"
@@ -42,22 +46,37 @@ install_deps() {
     if [ "${EUID:-$(id -u)}" -ne 0 ]; then SUDO="sudo"; fi
     $SUDO apt-get update
     $SUDO apt-get install -y \
-      git git-lfs cmake ninja-build build-essential pkg-config \
-      python3 python3-pip unzip
+      git cmake ninja-build build-essential pkg-config \
+      python3 python3-pip curl unzip
   else
     echo "Unsupported package manager." >&2
     exit 1
   fi
 }
 
-ensure_git_lfs() {
-  git lfs install --skip-repo
-  git -C "$WORKDIR" lfs pull || true
-}
-
 ensure_hf_cli() {
   if ! command -v hf >/dev/null 2>&1; then
     python3 -m pip install --user -U huggingface_hub
+  fi
+}
+
+# 🔥 NEW: Download binaries from release
+download_binaries() {
+  if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then
+    echo "Binaries already present."
+    return 0
+  fi
+
+  echo "Downloading prebuilt binaries..."
+  mkdir -p "$BIN_EXPORT_DIR"
+
+  if curl -L --fail "$RELEASE_URL" -o /tmp/llama-bin.zip; then
+    unzip -o /tmp/llama-bin.zip -d "$BIN_EXPORT_DIR"
+    echo "Binaries downloaded successfully."
+    return 0
+  else
+    echo "Download failed."
+    return 1
   fi
 }
 
@@ -78,13 +97,6 @@ ensure_llama_cpp() {
   local new_commit
   new_commit="$(git -C "$LLAMA_DIR" rev-parse HEAD)"
 
-  local recorded_commit=""
-  if [ -f "$STAMP_FILE" ]; then
-    recorded_commit="$(cat "$STAMP_FILE" 2>/dev/null || true)"
-  elif [ -f "$BIN_EXPORT_DIR/.llama_cpp_commit" ]; then
-    recorded_commit="$(cat "$BIN_EXPORT_DIR/.llama_cpp_commit" 2>/dev/null || true)"
-  fi
-
   cmake_args=(
     -S "$LLAMA_DIR"
     -B "$LLAMA_DIR/build"
@@ -97,27 +109,18 @@ ensure_llama_cpp() {
     cmake_args+=(-DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHS")
   fi
 
-  local exported_bin="$BIN_EXPORT_DIR/llama-server"
+  # 🔥 Try downloading first
+  download_binaries || true
 
-  if [ ! -x "$exported_bin" ]; then
-    echo "No exported binaries found. Building..."
+  # 🔁 Fallback to build
+  if [ ! -x "$BIN_EXPORT_DIR/llama-server" ]; then
+    echo "No binaries available. Building..."
     cmake "${cmake_args[@]}"
     cmake --build "$LLAMA_DIR/build" --config Release -j"$(nproc)"
     printf '%s\n' "$new_commit" > "$STAMP_FILE"
     export_binaries
-    return
-  fi
-
-  if [ "$recorded_commit" != "$new_commit" ]; then
-    echo "llama.cpp updated."
-    if prompt_yes_no "Rebuild binaries?"; then
-      cmake "${cmake_args[@]}"
-      cmake --build "$LLAMA_DIR/build" --config Release -j"$(nproc)"
-      printf '%s\n' "$new_commit" > "$STAMP_FILE"
-      export_binaries
-    fi
   else
-    echo "Binaries are up to date."
+    echo "Using prebuilt binaries."
   fi
 }
 
@@ -140,7 +143,6 @@ start_server() {
 }
 
 install_deps
-ensure_git_lfs
 ensure_hf_cli
 ensure_llama_cpp
 ensure_models

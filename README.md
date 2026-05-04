@@ -13,4 +13,4 @@ sudo apt-get update
 sudo apt-get install -y git curl unzip
 git clone https://github.com/gusadelic/llm-server.git
 cd llm-server
-./install.sh
+bash install.sh

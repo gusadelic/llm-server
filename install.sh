@@ -45,7 +45,11 @@ update_line() {
   [ "$INTERACTIVE" = "1" ] && printf "\r\033[K%s %s" "$1" "$(spin)" || echo "$1..."
 }
 finish_line() {
-  [ "$INTERACTIVE" = "1" ] && printf "\r\033[K%s ✓\n" "$1" || echo "$1 ✓"
+  if [ "$INTERACTIVE" = "1" ]; then
+    printf "\r\033[K%s ✓\n" "$1"
+  else
+    echo "$1 ✓"
+  fi
 }
 
 # ===== Model =====
@@ -89,6 +93,7 @@ resolve_model() {
 
   echo "Downloading → $MODEL_PATH"
   curl -L --fail --progress-bar -C - "$MODEL_URL" -o "$MODEL_PATH"
+  echo ""
 }
 
 # ===== Binaries =====
@@ -119,26 +124,80 @@ start_server() {
 
 wait_for_server() {
   echo ""
+
+  # Step 1: startup spinner
   msg="Starting server..."
-  for i in {1..10}; do update_line "$msg"; sleep 0.2; done
+  for i in {1..10}; do
+    update_line "$msg"
+    sleep 0.2
+  done
   finish_line "$msg"
 
-  msg="Waiting for port..."
-  for i in {1..20}; do
-    if ss -tuln | grep -q ":$PORT"; then finish_line "$msg"; break; fi
-    update_line "$msg"; sleep 0.3
+  # Step 2: wait for port
+  msg="Waiting for port $PORT..."
+  for i in {1..40}; do
+    if ss -tuln | grep -q ":$PORT"; then
+      finish_line "$msg"
+      break
+    fi
+    update_line "$msg"
+    sleep 0.25
   done
 
+  echo ""
   echo "Loading model..."
+
+  # Step 3: model loading (dot progress)
+  DOT_COUNT=0
+  MAX_DOTS=80
+
   while true; do
-    if grep -qi "model loaded\|listening" "$LOG_FILE" 2>/dev/null; then
+    # success condition
+    if grep -qi "model loaded\|server listening" "$LOG_FILE" 2>/dev/null; then
+      echo ""
       echo "✓ Model loaded"
       break
     fi
-    sleep 1
+
+    # failure condition
+    if ! pgrep -f llama-server >/dev/null; then
+      echo ""
+      echo "❌ Server process exited"
+      echo "Check logs:"
+      echo "  tail -f $LOG_FILE"
+      return 1
+    fi
+
+    # print dot
     printf "."
+    DOT_COUNT=$((DOT_COUNT + 1))
+
+    # wrap line
+    if [ "$DOT_COUNT" -ge "$MAX_DOTS" ]; then
+      printf "\n"
+      DOT_COUNT=0
+    fi
+
+    sleep 1
   done
+
   echo ""
+
+  # Step 4: API check
+  msg="Checking API..."
+  for i in {1..30}; do
+    if curl -s "http://localhost:$PORT/v1/models" >/dev/null 2>&1; then
+      finish_line "$msg"
+      echo "🚀 Server ready!"
+      return
+    fi
+    update_line "$msg"
+    sleep 0.3
+  done
+
+  # fallback if API didn’t respond
+  echo ""
+  echo "⚠️ Server started but API check failed"
 }
 
 # ===== Instance =====

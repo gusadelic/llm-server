@@ -58,16 +58,6 @@ prompt_instance_id() {
     return
   fi
 
-  echo ""
-  echo "🌐 ThunderCompute setup (optional)"
-  echo ""
-  echo "To access externally:"
-  echo "  1. Open ThunderCompute UI"
-  echo "  2. Add port: $PORT"
-  echo "  3. URL:"
-  echo "     https://<instance-id>-$PORT.thundercompute.net"
-  echo ""
-
   read -r -p "Enter instance ID (or press Enter for localhost): " INSTANCE_ID || true
 
   save_instance_id
@@ -218,7 +208,17 @@ print_instructions() {
   echo "Base URL: $BASE_URL"
   echo "Model:    $(basename "$MODEL_FILE")"
   echo ""
-
+  if [[ "$PUBLIC_BASE_URL" == https://*thundercompute.net* ]]; then
+    echo "⚠️  ThunderCompute Port Setup Required"
+    echo ""
+    echo "If you cannot connect, you must expose port $PORT:"
+    echo ""
+    echo "  1. Open ThunderCompute UI"
+    echo "  2. Go to your instance"
+    echo "  3. Add port: $PORT"
+    echo "  4. Refresh the URL"
+    echo ""
+  fi
   if has_systemd; then
     echo "Start:   sudo systemctl start llama-server"
     echo "Stop:    sudo systemctl stop llama-server"

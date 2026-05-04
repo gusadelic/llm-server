@@ -21,9 +21,13 @@ HOST="0.0.0.0"
 
 mkdir -p "$WORKDIR" "$MODEL_DIR" "$BIN_EXPORT_DIR"
 
+# ===== Helpers =====
+has_systemd() {
+  [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1
+}
+
 # ===== Dependencies =====
 install_deps() {
-  echo "Step: install_deps"
   sudo apt-get update
   sudo apt-get install -y git curl unzip python3 python3-pip
 }
@@ -42,8 +46,6 @@ save_instance_id() {
 }
 
 prompt_instance_id() {
-  echo "Step: prompt_instance_id"
-
   load_instance_id
 
   if [ -n "${INSTANCE_ID:-}" ]; then
@@ -85,8 +87,6 @@ get_base_url() {
 
 # ===== HuggingFace =====
 ensure_hf_cli() {
-  echo "Step: ensure_hf_cli"
-
   if ! command -v hf >/dev/null 2>&1; then
     echo "Installing HuggingFace CLI..."
     pip3 install --user -U huggingface_hub || true
@@ -96,18 +96,13 @@ ensure_hf_cli() {
 
 # ===== Binaries =====
 download_binaries() {
-  echo "Step: download_binaries"
-
   if [ -x "$BIN_EXPORT_DIR/llama-server" ]; then
     echo "Binaries already present."
     return
   fi
 
   echo "Downloading binaries..."
-  if ! curl -L --fail "$RELEASE_URL" -o /tmp/llama.zip; then
-    echo "❌ Failed to download binaries"
-    exit 1
-  fi
+  curl -L --fail "$RELEASE_URL" -o /tmp/llama.zip
 
   unzip -o /tmp/llama.zip -d "$BIN_EXPORT_DIR"
 
@@ -137,27 +132,17 @@ install_libs() {
 
 # ===== Models =====
 ensure_models() {
-  echo "Step: ensure_models"
-
   if [ ! -f "$MODEL_DIR/$MODEL_FILE" ]; then
-    hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR" || {
-      echo "❌ Failed to download model"
-      exit 1
-    }
+    hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_DIR"
   fi
 
   if [ ! -f "$MODEL_DIR/$MMPROJ_FILE" ]; then
-    hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR" || {
-      echo "❌ Failed to download mmproj"
-      exit 1
-    }
+    hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
   fi
 }
 
 # ===== systemd =====
 install_systemd_service() {
-  echo "Step: install_systemd_service"
-
   SERVICE_FILE="/etc/systemd/system/llama-server.service"
 
   sudo tee "$SERVICE_FILE" >/dev/null <<EOF
@@ -190,10 +175,24 @@ EOF
   sudo systemctl restart llama-server
 }
 
+# ===== Fallback server =====
+start_background_server() {
+  echo "Starting server (background mode)..."
+
+  export LD_LIBRARY_PATH="$BIN_EXPORT_DIR:${LD_LIBRARY_PATH:-}"
+
+  nohup "$BIN_EXPORT_DIR/llama-server" \
+    --host "$HOST" \
+    --port "$PORT" \
+    --model "$MODEL_DIR/$MODEL_FILE" \
+    --mmproj "$MODEL_DIR/$MMPROJ_FILE" \
+    >"$LOG_FILE" 2>&1 &
+
+  echo "Server started (PID $!)"
+}
+
 # ===== Health Check =====
 wait_for_server() {
-  echo "Step: wait_for_server"
-
   BASE_URL="$(get_base_url)"
 
   for i in {1..30}; do
@@ -205,7 +204,6 @@ wait_for_server() {
   done
 
   echo "⚠️ Server not reachable yet"
-  echo "Check logs: journalctl -u llama-server -f"
 }
 
 # ===== Instructions =====
@@ -220,10 +218,21 @@ print_instructions() {
   echo "Base URL: $BASE_URL"
   echo "Model:    $(basename "$MODEL_FILE")"
   echo ""
-  echo "Start:   sudo systemctl start llama-server"
-  echo "Stop:    sudo systemctl stop llama-server"
-  echo "Restart: sudo systemctl restart llama-server"
-  echo "Logs:    journalctl -u llama-server -f"
+
+  if has_systemd; then
+    echo "Start:   sudo systemctl start llama-server"
+    echo "Stop:    sudo systemctl stop llama-server"
+    echo "Restart: sudo systemctl restart llama-server"
+    echo "Logs:    journalctl -u llama-server -f"
+  else
+    echo "Start:   (already running)"
+    echo "Stop:    pkill -f llama-server"
+    echo "Logs:    tail -f $LOG_FILE"
+  fi
+
+  echo ""
+  echo "Test:"
+  echo "  curl $BASE_URL/models"
   echo ""
 }
 
@@ -236,9 +245,15 @@ ensure_models
 prompt_instance_id
 build_public_url
 
-echo "Stopping old processes..."
+echo "Stopping any existing processes..."
 pkill -f llama-server || true
 
-install_systemd_service
+if has_systemd; then
+  install_systemd_service
+else
+  echo "⚠️ systemd not available, using background mode"
+  start_background_server
+fi
+
 wait_for_server
 print_instructions

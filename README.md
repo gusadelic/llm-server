@@ -1,6 +1,6 @@
 # LLM Server (llama.cpp + Prebuilt Binaries)
 
-This project runs llama.cpp with prebuilt CUDA binaries stored using Git LFS.
+This project runs llama.cpp with prebuilt CUDA binaries.
 
 ---
 

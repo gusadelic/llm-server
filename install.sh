@@ -40,6 +40,25 @@ prompt_yes_no() {
   esac
 }
 
+prompt_instance_id() {
+  if [ -n "${PUBLIC_BASE_URL:-}" ]; then
+    return
+  fi
+
+  echo ""
+  read -r -p "Enter ThunderCompute instance ID (e.g. p7ujocf1) or press Enter to skip: " INSTANCE_ID
+
+  if [ -n "$INSTANCE_ID" ]; then
+    PUBLIC_BASE_URL="https://${INSTANCE_ID}-${PORT}.thundercompute.net"
+  else
+    PUBLIC_BASE_URL="http://localhost:${PORT}"
+  fi
+}
+
+get_base_url() {
+  echo "${PUBLIC_BASE_URL}/v1"
+}
+
 install_deps() {
   if command -v apt-get >/dev/null 2>&1; then
     SUDO=""
@@ -166,6 +185,24 @@ ensure_models() {
   [ -f "$mmproj_path" ] || hf download "$MODEL_REPO" "$MMPROJ_FILE" --local-dir "$MODEL_DIR"
 }
 
+print_openai_instructions() {
+  BASE_URL="$(get_base_url)"
+
+  echo ""
+  echo "=============================================="
+  echo "🚀 Local LLM Server is running!"
+  echo "=============================================="
+  echo ""
+  echo "Use these settings in Cline / Codex:"
+  echo ""
+  echo "API Provider: OpenAI Compatible"
+  echo "Base URL:     ${BASE_URL}"
+  echo "API Key:      anything"
+  echo "Model:        $(basename "$MODEL_FILE")"
+  echo ""
+  echo "=============================================="
+}
+
 start_server() {
   exec "$BIN_EXPORT_DIR/llama-server" \
     --host "$HOST" \
@@ -176,8 +213,10 @@ start_server() {
     --n-predict "$N_PREDICT"
 }
 
+prompt_instance_id
 install_deps
 ensure_hf_cli
 ensure_llama_cpp
 ensure_models
+print_openai_instructions
 start_server

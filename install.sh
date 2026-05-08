@@ -11,8 +11,8 @@ INSTANCE_FILE="$WORKDIR/.instance_id"
 
 RELEASE_URL="${RELEASE_URL:-https://github.com/gusadelic/llm-server/releases/download/v0.1.0/llama-bin.zip}"
 
-MODEL_REPO="${MODEL_REPO:-cloudbjorn/Qwen3.6-35B-A3B_Opus-4.6-Reasoning-3300x-GGUF}"
-MODEL_FILE="${MODEL_FILE:-Qwen-35B-Reasoning-Q4_K_M.gguf}"
+MODEL_REPO="${MODEL_REPO:-unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF}"
+MODEL_FILE="${MODEL_FILE:-Devstral-Small-2-24B-Instruct-2512-BF16.gguf}"
 
 PORT="${PORT:-8080}"
 HOST="0.0.0.0"

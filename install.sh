@@ -11,8 +11,8 @@ INSTANCE_FILE="$WORKDIR/.instance_id"
 
 RELEASE_URL="${RELEASE_URL:-https://github.com/gusadelic/llm-server/releases/download/v0.1.0/llama-bin.zip}"
 
-MODEL_REPO="${MODEL_REPO:-unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF}"
-MODEL_FILE="${MODEL_FILE:-Devstral-2-123B-Instruct-2512-UD-Q2_K_XL.gguf}"
+MODEL_REPO="${MODEL_REPO:-unsloth/Qwen3-Coder-Next-GGUF }"
+MODEL_FILE="${MODEL_FILE:-Qwen3-Coder-Next-UD-Q4_K_XL.gguf}"
 
 PORT="${PORT:-8080}"
 HOST="0.0.0.0"

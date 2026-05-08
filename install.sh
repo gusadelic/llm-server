@@ -201,8 +201,16 @@ wait_for_server() {
 }
 
 # ===== Instance =====
-load_instance_id() { [ -f "$INSTANCE_FILE" ] && INSTANCE_ID="$(cat "$INSTANCE_FILE")"; }
-save_instance_id() { [ -n "${INSTANCE_ID:-}" ] && echo "$INSTANCE_ID" > "$INSTANCE_FILE"; }
+load_instance_id() {
+  if [[ -f "$INSTANCE_FILE" ]]; then
+    INSTANCE_ID=$(<"$INSTANCE_FILE")
+  fi
+}
+save_instance_id() {
+  if [[ -n "${INSTANCE_ID:-}" ]]; then
+    echo "$INSTANCE_ID" > "$INSTANCE_FILE"
+  fi
+}
 
 prompt_instance_id() {
   load_instance_id
@@ -212,9 +220,11 @@ prompt_instance_id() {
 }
 
 build_url() {
-  [ -n "${INSTANCE_ID:-}" ] \
-    && BASE_URL="https://${INSTANCE_ID}-${PORT}.thundercompute.net" \
-    || BASE_URL="http://localhost:${PORT}"
+  if [[ -n "${INSTANCE_ID:-}" ]]; then
+    BASE_URL="https://${INSTANCE_ID}-${PORT}.thundercompute.net"
+  else
+    BASE_URL="http://localhost:${PORT}"
+  fi
 }
 
 # ===== Run Script =====
